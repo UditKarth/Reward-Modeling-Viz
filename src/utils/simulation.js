@@ -25,7 +25,7 @@ export class SimulationEngine {
     // Create point-mass agent (simpler than 2-DOF arm for visualization)
     const agentRadius = 15;
     this.agent = Bodies.circle(width / 4, height / 2, agentRadius, {
-      frictionAir: 0.1,
+      frictionAir: 0.01, // Reduced friction for better movement
       render: {
         fillStyle: '#3b82f6',
         strokeStyle: '#1e40af',
@@ -55,13 +55,16 @@ export class SimulationEngine {
     this.positionHistory = [];
     this.maxHistoryLength = 10;
     
-    // Success threshold
-    this.successThreshold = 30;
+    // Success threshold (distance between centers)
+    // Agent radius: 15, Goal radius: 20, so threshold of 35 allows overlap
+    this.successThreshold = 35;
     
-    // PRM parameters
-    this.hopSize = 50;
-    this.currentHop = 0;
-    this.hopProgress = 0;
+    // Track previous distance for continuous reward calculation
+    this.previousDistance = null;
+    this.initialDistance = null;
+    
+    // Success counter
+    this.successCount = 0;
   }
   
   getAgentPosition() {
@@ -88,56 +91,82 @@ export class SimulationEngine {
   
   updateAgentVelocity(vx, vy) {
     this.agentVelocity = { x: vx, y: vy };
+    // Use setVelocity for immediate movement, but also track for force application
     Body.setVelocity(this.agent, { x: vx, y: vy });
   }
   
-  step() {
-    // Apply velocity
+  step(rewardType, gamma = 0.9, learningRate = 0.1, width = 400, height = 300) {
+    // 1. Calculate the Reward for the current state (before physics update)
+    const reward = this.getReward(rewardType, gamma, learningRate, width, height);
+    
+    // 2. Check for Success and Reset
+    let isDone = false;
+    if (this.isSuccess()) {
+      this.successCount++;
+      this.reset();
+      isDone = true;
+      // Return success reward
+      return { reward: 1.0, isDone: true };
+    }
+
+    // 3. Physics Update
+    // Ensure the agentVelocity is high enough to overcome frictionAir (0.01)
     if (this.agentVelocity.x !== 0 || this.agentVelocity.y !== 0) {
       Body.setVelocity(this.agent, this.agentVelocity);
     }
     
-    // Update position history for PRM
+    // Update position history
     const currentPos = this.getAgentPosition();
     this.positionHistory.push({ ...currentPos, time: Date.now() });
     if (this.positionHistory.length > this.maxHistoryLength) {
       this.positionHistory.shift();
     }
     
-    // Update PRM hop progress
-    this.updatePRMProgress();
-    
     Engine.update(this.engine, 1000 / 60);
+    return { reward, isDone: false };
   }
   
-  updatePRMProgress() {
-    const agentPos = this.getAgentPosition();
-    const goalPos = this.getGoalPosition();
-    const distance = this.getDistance();
+  // Continuous reward calculator - no discretization
+  getReward(type, gamma = 0.9, learningRate = 0.1, width = 400, height = 300) {
+    const dist = this.getDistance();
+    const prevDist = this.previousDistance !== null ? this.previousDistance : dist;
     
-    // Calculate expected number of hops
-    const expectedHops = Math.ceil(distance / this.hopSize);
-    
-    // Calculate current hop based on distance
-    this.currentHop = Math.floor((this.getInitialDistance() - distance) / this.hopSize);
-    
-    // Calculate progress within current hop
-    const hopStartDistance = this.getInitialDistance() - (this.currentHop * this.hopSize);
-    const hopEndDistance = Math.max(0, hopStartDistance - this.hopSize);
-    const hopProgress = (hopStartDistance - distance) / (hopStartDistance - hopEndDistance || 1);
-    this.hopProgress = Math.max(0, Math.min(1, hopProgress));
-  }
-  
-  getInitialDistance() {
-    // Use first position in history or current distance
-    if (this.positionHistory.length > 0) {
-      const firstPos = this.positionHistory[0];
-      const goalPos = this.getGoalPosition();
-      return Math.sqrt(
-        Math.pow(firstPos.x - goalPos.x, 2) + Math.pow(firstPos.y - goalPos.y, 2)
-      );
+    // Initialize initial distance on first call
+    if (this.initialDistance === null) {
+      this.initialDistance = dist;
     }
-    return this.getDistance();
+    
+    this.previousDistance = dist;
+
+    switch (type) {
+      case 'sparse':
+        // Only 1 at the goal, 0 elsewhere. Extremely hard to learn.
+        return dist < this.successThreshold ? 1.0 : 0.0;
+
+      case 'shaping':
+        // Potential-based: r = gamma * Phi(s') - Phi(s)
+        // Phi is negative distance; reward is positive for getting closer.
+        const phiNext = -dist;
+        const phiCurr = -prevDist;
+        return (gamma * phiNext) - phiCurr;
+
+      case 'prm':
+        // Continuous Progress Reward: Normalized distance reduction
+        // NO Math.floor or Math.ceil - fully continuous
+        const initialDist = this.initialDistance;
+        const progress = Math.max(0, (initialDist - dist) / initialDist);
+        // Scale by learning rate for consistency
+        return learningRate * progress;
+
+      case 'semantic':
+        // Gaussian Similarity: R = exp(-d^2 / 2sigma^2)
+        // Provides a smooth "hill" to climb.
+        const sigma = 100; // Adjusted for pixel space
+        return Math.exp(-Math.pow(dist, 2) / (2 * Math.pow(sigma, 2)));
+
+      default:
+        return 0;
+    }
   }
   
   isSuccess() {
@@ -150,8 +179,17 @@ export class SimulationEngine {
     Body.setVelocity(this.agent, { x: 0, y: 0 });
     this.agentVelocity = { x: 0, y: 0 };
     this.positionHistory = [];
-    this.currentHop = 0;
-    this.hopProgress = 0;
+    // Reset distance tracking for continuous rewards
+    this.previousDistance = null;
+    this.initialDistance = null;
+  }
+  
+  getSuccessCount() {
+    return this.successCount;
+  }
+  
+  resetSuccessCount() {
+    this.successCount = 0;
   }
   
   renderFrame() {

@@ -32,43 +32,33 @@ export function calculateDistanceShapingReward(
 export function calculatePRMReward(
   currentPos,
   goalPos,
-  hopSize,
-  currentHop,
-  hopProgress,
+  initialDistance,
   learningRate = 0.1
 ) {
   const distance = Math.sqrt(
     Math.pow(currentPos.x - goalPos.x, 2) + Math.pow(currentPos.y - goalPos.y, 2)
   );
   
-  // Predict progress based on hop model
-  const expectedHops = Math.ceil(distance / hopSize);
-  const predictedProgress = Math.max(0, 1 - (expectedHops * hopSize - distance) / (expectedHops * hopSize));
-  
-  // Reward based on predicted progress and learning rate
-  const reward = learningRate * predictedProgress * (1 - distance / (expectedHops * hopSize));
-  
-  return Math.max(0, reward);
+  // Continuous Progress Reward: Normalized distance reduction
+  // NO Math.floor or Math.ceil - fully continuous
+  if (initialDistance === null || initialDistance === 0) {
+    return 0;
+  }
+  const progress = Math.max(0, (initialDistance - distance) / initialDistance);
+  // Scale by learning rate for consistency
+  return learningRate * progress;
 }
 
 export function calculateSemanticReward(agentPos, goalPos, width, height) {
-  // Mock vision-language reward using a pre-calculated 2D similarity heatmap
-  // This simulates a semantic similarity score based on position
-  const normalizedX = agentPos.x / width;
-  const normalizedY = agentPos.y / height;
-  const goalNormalizedX = goalPos.x / width;
-  const goalNormalizedY = goalPos.y / height;
+  // Gaussian Similarity: R = exp(-d^2 / 2sigma^2)
+  // Provides a smooth "hill" to climb.
+  const distance = Math.sqrt(
+    Math.pow(agentPos.x - goalPos.x, 2) + Math.pow(agentPos.y - goalPos.y, 2)
+  );
   
-  // Create a Gaussian-like similarity function centered on goal
-  const dx = normalizedX - goalNormalizedX;
-  const dy = normalizedY - goalNormalizedY;
-  const distance = Math.sqrt(dx * dx + dy * dy);
-  
-  // Gaussian kernel with sigma = 0.2
-  const sigma = 0.2;
-  const similarity = Math.exp(-(distance * distance) / (2 * sigma * sigma));
-  
-  return similarity;
+  // Use pixel-space sigma for better gradient
+  const sigma = 100; // Adjusted for pixel space (was 0.2 in normalized space)
+  return Math.exp(-Math.pow(distance, 2) / (2 * Math.pow(sigma, 2)));
 }
 
 export function generateRewardGradient(width, height, goalPos, rewardType, params = {}) {
@@ -100,12 +90,12 @@ export function generateRewardGradient(width, height, goalPos, rewardType, param
           reward = (reward + 100) / 200; // Rough normalization
           break;
         case 'prm':
+          // For gradient, estimate initial distance (use max possible distance)
+          const maxDist = Math.sqrt(width * width + height * height);
           reward = calculatePRMReward(
             pos,
             goalPos,
-            params.hopSize || 50,
-            0,
-            0,
+            maxDist,
             params.learningRate || 0.1
           );
           break;
