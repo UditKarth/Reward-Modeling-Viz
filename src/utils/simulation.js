@@ -25,7 +25,7 @@ export class SimulationEngine {
     // Create point-mass agent (simpler than 2-DOF arm for visualization)
     const agentRadius = 15;
     this.agent = Bodies.circle(width / 4, height / 2, agentRadius, {
-      frictionAir: 0.01, // Reduced friction for better movement
+      frictionAir: 0, // No friction - velocity is controlled directly by policy
       render: {
         fillStyle: '#3b82f6',
         strokeStyle: '#1e40af',
@@ -90,9 +90,8 @@ export class SimulationEngine {
   }
   
   updateAgentVelocity(vx, vy) {
+    // Store velocity - it will be applied in step() before physics update
     this.agentVelocity = { x: vx, y: vy };
-    // Use setVelocity for immediate movement, but also track for force application
-    Body.setVelocity(this.agent, { x: vx, y: vy });
   }
   
   step(rewardType, gamma = 0.9, learningRate = 0.1, width = 400, height = 300) {
@@ -109,11 +108,13 @@ export class SimulationEngine {
       return { reward: 1.0, isDone: true };
     }
 
-    // 3. Physics Update
-    // Ensure the agentVelocity is high enough to overcome frictionAir (0.01)
-    if (this.agentVelocity.x !== 0 || this.agentVelocity.y !== 0) {
-      Body.setVelocity(this.agent, this.agentVelocity);
-    }
+    // 3. Apply velocity before physics update
+    // This ensures the agent moves according to the policy's desired velocity
+    // Always apply velocity (even if zero) to ensure consistent behavior
+    Body.setVelocity(this.agent, this.agentVelocity);
+    
+    // 4. Physics Update
+    Engine.update(this.engine, 1000 / 60);
     
     // Update position history
     const currentPos = this.getAgentPosition();
@@ -122,7 +123,6 @@ export class SimulationEngine {
       this.positionHistory.shift();
     }
     
-    Engine.update(this.engine, 1000 / 60);
     return { reward, isDone: false };
   }
   

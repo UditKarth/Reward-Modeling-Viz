@@ -87,7 +87,9 @@ export default function SimulationCanvas({
       ];
       
       let bestDirection = { x: 0, y: 0 };
-      let maxExpectedReward = currentReward;
+      // Initialize to negative infinity to ensure we always pick the best direction
+      // For transition-based rewards, staying still gives 0 reward, so we compare against that
+      let maxExpectedReward = -Infinity;
       
       // Sample rewards in different directions
       samples.forEach((sample) => {
